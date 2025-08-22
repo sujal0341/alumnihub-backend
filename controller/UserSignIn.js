@@ -1,19 +1,29 @@
-const User=require('../models/userModel');
+const User = require('../models/userModel'); // For students
+const Alumni = require('../models/alumniModel'); // For alumni
 const bcrypt = require('bcryptjs');
 const jwt = require("jsonwebtoken");
-async function UserSignInController(req,res){
-try{
-    const { email, password,role } = req.body;
+
+async function UserSignInController(req, res) {
+  try {
+    const { email, password, role } = req.body;
 
     // Check for missing fields
     if (!email || !password || !role) {
       return res.status(400).json({ message: "Please enter all fields" });
     }
 
-    // Find user by email
-    const user = await User.findOne({ email });
+    // Validate role
+    if (!["student", "alumni"].includes(role)) {
+      return res.status(400).json({ message: "Role must be either 'student' or 'alumni'" });
+    }
+
+    // Select model based on role
+    const Model = role === "student" ? User : Alumni;
+
+    // Find user/alumni by email
+    const user = await Model.findOne({ email });
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({ message: `${role.charAt(0).toUpperCase() + role.slice(1)} not found` });
     }
 
     // Verify password
@@ -26,7 +36,8 @@ try{
     const tokenData = {
       email: user.email,
       id: user._id,
-      profilePictureUrl:user?.profilePictureUrl,
+      profilePicture: user.profilePictureUrl || user.profileImage, // Handle both schemas
+      role: user.role,
     };
     const token = await jwt.sign(tokenData, process.env.JWT_SECRET, {
       expiresIn: "8h",
@@ -35,19 +46,28 @@ try{
     // Cookie options
     const tokenOption = {
       secure: true,
-      httpOnly: true, 
-      sameSite: 'None' ,
-      maxAge: 8 * 60 * 60 * 1000, 
+      httpOnly: true,
+      sameSite: 'None',
+      maxAge: 8 * 60 * 60 * 1000, // 8 hours
     };
+
     return res.cookie("token", token, tokenOption).status(200).json({
-        message: "Login successful",
-        success: true,
-        error: false,
-        role,token,user
-      });
-}
-catch (error) {
+      message: "Login successful",
+      success: true,
+      error: false,
+      role,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        profilePicture: user.profilePictureUrl || user.profileImage, // Return appropriate field
+      },
+    });
+  } catch (error) {
     return res.status(500).json({ error: error.message });
+  }
 }
-}
+
 module.exports = UserSignInController;
