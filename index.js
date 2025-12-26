@@ -1,7 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
-const webpush = require("web-push");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
@@ -9,10 +8,12 @@ const router = require("./routes/index");
 
 const app = express();
 
-// ✅ CORS (make sure FRONTEND_URL is correct on Vercel)
+/* ===============================
+   MIDDLEWARE
+================================ */
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL,
+    origin: process.env.FRONTEND_URL || "*",
     credentials: true,
   })
 );
@@ -20,20 +21,52 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
-// ✅ Connect DB ONCE (important for serverless)
-connectDB();
+/* ===============================
+   DATABASE CONNECTION (SAFE)
+================================ */
+connectDB()
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => console.error("❌ MongoDB error:", err.message));
 
-// ✅ VAPID setup
-webpush.setVapidDetails(
-  "mailto:your-email@example.com",
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
-
-// ⚠️ In-memory storage (will reset on every invocation on Vercel)
+/* ===============================
+   WEB PUSH (SAFE INITIALIZATION)
+================================ */
+let webpush;
 let subscriptions = [];
 
-// Subscribe endpoint
+try {
+  webpush = require("web-push");
+
+  if (
+    process.env.VAPID_PUBLIC_KEY &&
+    process.env.VAPID_PRIVATE_KEY
+  ) {
+    webpush.setVapidDetails(
+      "mailto:admin@alumnihub.com",
+      process.env.VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    );
+    console.log("✅ Web Push initialized");
+  } else {
+    console.warn("⚠️ VAPID keys missing, push disabled");
+  }
+} catch (err) {
+  console.warn("⚠️ web-push not available:", err.message);
+}
+
+/* ===============================
+   ROUTES
+================================ */
+
+// Health check
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: "OK",
+    message: "Alumni Hub Backend is running",
+  });
+});
+
+// Subscribe to push notifications
 app.post("/api/subscribe", (req, res) => {
   subscriptions.push(req.body);
   res.status(201).json({ message: "Subscription saved" });
@@ -41,35 +74,36 @@ app.post("/api/subscribe", (req, res) => {
 
 // Send notification
 app.post("/api/send-notification", async (req, res) => {
+  if (!webpush) {
+    return res.status(500).json({ error: "Push service not available" });
+  }
+
   try {
-    const notificationPayload = {
+    const payload = JSON.stringify({
       notification: {
         title: "Alumni Hub Notification",
-        body: req.body.message,
+        body: req.body.message || "New update available",
         icon: "https://res.cloudinary.com/dsujse28c/image/upload/v1738330353/OIG1_yps2rt.jpg",
       },
-    };
+    });
 
     await Promise.all(
       subscriptions.map((sub) =>
-        webpush.sendNotification(sub, JSON.stringify(notificationPayload))
+        webpush.sendNotification(sub, payload)
       )
     );
 
     res.status(200).json({ message: "Notification sent" });
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error("❌ Push error:", err.message);
     res.status(500).json({ error: "Failed to send notification" });
   }
 });
 
-// API routes
+// Other APIs
 app.use("/api", router);
 
-// Health check
-app.get("/", (req, res) => {
-  res.send("Alumni Hub Backend is running");
-});
-
-// ✅ VERY IMPORTANT FOR VERCEL
+/* ===============================
+   EXPORT FOR VERCEL
+================================ */
 module.exports = app;
